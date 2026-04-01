@@ -329,15 +329,14 @@ def predict(target_date: str | None, venue: str | None, race_number: int | None,
 
 
 @cli.command()
-@click.option("--mode", type=click.Choice(["accuracy", "roi"]), default="accuracy")
 @click.option("--min-races", default=50, type=int, help="最低学習レース数")
-def train(mode: str, min_races: int):
-    """モデルを学習"""
+def train(min_races: int):
+    """ランキング予測モデルを学習（的中率/回収率共通）"""
     session = get_session()
-    predictor = KeirinPredictor(mode=mode)
+    predictor = KeirinPredictor()
+    mode = "accuracy"
 
-    mode_label = "的中率重視" if mode == "accuracy" else "回収率重視"
-    console.print(f"\n[bold blue]モデル学習: {mode_label}[/bold blue]\n")
+    console.print(f"\n[bold blue]モデル学習 (LambdaRank)[/bold blue]\n")
 
     with console.status("学習中..."):
         result = predictor.train(session, min_races=min_races)
@@ -346,9 +345,14 @@ def train(mode: str, min_races: int):
         console.print(f"[red]{result['error']}[/red]")
     else:
         console.print(f"[green]学習完了![/green]")
-        console.print(f"  レース数: {result['n_races']}")
+        console.print(f"  学習レース: {result.get('n_train_races', result.get('n_races', '?'))}")
+        console.print(f"  検証レース: {result.get('n_valid_races', '?')}")
         console.print(f"  サンプル数: {result['n_samples']}")
-        console.print(f"  CV Score: {result['cv_score']:.4f} (±{result['cv_std']:.4f})")
+        console.print(f"  特徴量数: {result.get('n_features', '?')}")
+        if "top1_accuracy" in result:
+            console.print(f"  1着的中率: {result['top1_accuracy']:.1%}")
+        if "top3_exact" in result:
+            console.print(f"  3着完全一致: {result['top3_exact']:.1%}")
 
     session.close()
 
