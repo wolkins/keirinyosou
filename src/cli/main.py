@@ -121,8 +121,12 @@ def scrape_range(date_from: str, date_to: str | None, source: str, with_results:
         return
 
     total_days = (end - start).days + 1
+    from src.common.config import REQUEST_DELAY, DAY_PAUSE
+    est_hours = total_days * 80 * 2 * REQUEST_DELAY / 3600
     console.print(f"\n[bold blue]一括取得: {date_from} → {end.isoformat()} ({total_days}日間)[/bold blue]")
-    console.print(f"ソース: {source} / 結果取得: {'ON' if with_results else 'OFF'}\n")
+    console.print(f"ソース: {source} / 結果取得: {'ON' if with_results else 'OFF'}")
+    console.print(f"リクエスト間隔: {REQUEST_DELAY}秒 / 日ごと休憩: {DAY_PAUSE}秒")
+    console.print(f"推定所要時間: 約{est_hours:.0f}時間\n")
 
     scraper = KdreamsScraper() if source == "kdreams" else WinticketScraper()
     session = get_session()
@@ -193,6 +197,11 @@ def scrape_range(date_from: str, date_to: str | None, source: str, with_results:
             except Exception as e:
                 error_days.append(current_str)
                 console.print(f"  [red]日単位エラー: {e}[/red]")
+
+            # 日ごとの休憩（サーバー負荷軽減）
+            if current < end:
+                import time
+                time.sleep(DAY_PAUSE)
 
             current += timedelta(days=1)
 
@@ -345,14 +354,16 @@ def train(min_races: int):
         console.print(f"[red]{result['error']}[/red]")
     else:
         console.print(f"[green]学習完了![/green]")
-        console.print(f"  学習レース: {result.get('n_train_races', result.get('n_races', '?'))}")
+        console.print(f"  エンジン: {result.get('engine', '?')}")
+        console.print(f"  学習レース: {result.get('n_train_races', '?')}")
         console.print(f"  検証レース: {result.get('n_valid_races', '?')}")
         console.print(f"  サンプル数: {result['n_samples']}")
         console.print(f"  特徴量数: {result.get('n_features', '?')}")
+        console.print(f"  時間減衰: 半減期{result.get('decay_half_life', '?')}日 (重み {result.get('weight_min', 0):.2f}〜{result.get('weight_max', 1):.2f})")
         if "top1_accuracy" in result:
-            console.print(f"  1着的中率: {result['top1_accuracy']:.1%}")
+            console.print(f"  [bold]1着的中率: {result['top1_accuracy']:.1%}[/bold]")
         if "top3_exact" in result:
-            console.print(f"  3着完全一致: {result['top3_exact']:.1%}")
+            console.print(f"  [bold]3着完全一致: {result['top3_exact']:.1%}[/bold]")
 
     session.close()
 

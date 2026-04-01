@@ -56,13 +56,13 @@ class KeirinPredictor:
 
         # 特徴量を構築
         all_dfs = []
-        race_ids = []
+        race_date_map = {}  # race_id → race_date
         for race in races:
             df = build_features_for_race(session, race)
             if not df.empty and "finish_position" in df.columns:
                 df["race_id"] = race.id
                 all_dfs.append(df)
-                race_ids.append(race.id)
+                race_date_map[race.id] = race.race_date
 
         if not all_dfs:
             return {"error": "有効なトレーニングデータがありません"}
@@ -72,6 +72,17 @@ class KeirinPredictor:
         # ラベル: 着順を反転（1着=9点, 9着=1点）
         max_pos = full_df["finish_position"].max()
         full_df["label"] = (max_pos + 1 - full_df["finish_position"]).clip(lower=0)
+
+        # 時間減衰付き重み: weight = exp(-ln2 × 経過日数 / half_life)
+        from src.common.config import DECAY_HALF_LIFE_DAYS
+        from datetime import date as date_cls
+        reference_date = max(race_date_map.values())
+        full_df["sample_weight"] = full_df["race_id"].map(
+            lambda rid: np.exp(
+                -np.log(2) * (reference_date - race_date_map.get(rid, reference_date)).days
+                / DECAY_HALF_LIFE_DAYS
+            )
+        )
 
         # 時系列分割（最後20%を検証用）
         unique_races = full_df["race_id"].unique()
@@ -86,13 +97,14 @@ class KeirinPredictor:
 
         X_train = train_df[available_cols].fillna(0)
         y_train = train_df["label"]
+        w_train = train_df["sample_weight"]
         group_train = train_df.groupby("race_id").size().tolist()
 
         X_valid = valid_df[available_cols].fillna(0)
         y_valid = valid_df["label"]
         group_valid = valid_df.groupby("race_id").size().tolist()
 
-        # モデル学習
+        # モデル学習（時間減衰重み付き）
         if HAS_LIGHTGBM:
             ranker = lgb.LGBMRanker(
                 objective="lambdarank",
@@ -109,18 +121,19 @@ class KeirinPredictor:
             if len(valid_df) > 0 and group_valid:
                 ranker.fit(
                     X_train, y_train, group=group_train,
+                    sample_weight=w_train,
                     eval_set=[(X_valid, y_valid)],
                     eval_group=[group_valid],
                     callbacks=callbacks,
                 )
             else:
-                ranker.fit(X_train, y_train, group=group_train)
+                ranker.fit(X_train, y_train, group=group_train, sample_weight=w_train)
         else:
             # フォールバック: sklearn GradientBoosting（着順回帰）
             ranker = GradientBoostingRegressor(
                 n_estimators=200, max_depth=5, learning_rate=0.1, random_state=42,
             )
-            ranker.fit(X_train, y_train)
+            ranker.fit(X_train, y_train, sample_weight=w_train)
 
         self.model = ranker
 
@@ -161,6 +174,10 @@ class KeirinPredictor:
             "n_valid_races": len(valid_race_ids),
             "n_samples": len(full_df),
             "n_features": len(available_cols),
+            "decay_half_life": DECAY_HALF_LIFE_DAYS,
+            "weight_min": float(full_df["sample_weight"].min()),
+            "weight_max": float(full_df["sample_weight"].max()),
+            "engine": "LightGBM" if HAS_LIGHTGBM else "sklearn",
             **eval_results,
         }
 
