@@ -1,0 +1,4 @@
+#!/bin/bash
+# 競輪予想システム ランチャー
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$DIR/.venv/bin/python" -m src.cli.main "$@"

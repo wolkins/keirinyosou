@@ -1,0 +1,19 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# データ (VPS側で生成するもの)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/models/
+
+# ログ
+*.log
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
