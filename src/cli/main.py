@@ -136,13 +136,32 @@ def scrape_range(date_from: str, date_to: str | None, source: str, with_results:
     total_results = 0
     error_days = []
 
+    import time as time_mod
+    from src.common.database import Race, Racecourse
+
+    started_at = time_mod.time()
+
     try:
         current = start
         day_num = 0
+        skipped_days = 0
         while current <= end:
             day_num += 1
             current_str = current.isoformat()
-            console.print(f"[bold]--- [{day_num}/{total_days}] {current_str} ---[/bold]")
+            now = datetime.now().strftime("%H:%M:%S")
+            elapsed = time_mod.time() - started_at
+            elapsed_str = f"{int(elapsed//3600)}h{int(elapsed%3600//60):02d}m"
+
+            # 既にデータがある日はスキップ
+            dt = datetime.strptime(current_str, "%Y-%m-%d").date()
+            existing_count = session.query(Race).filter(Race.race_date == dt).count()
+            if existing_count > 0:
+                console.print(f"[dim][{now}] [{day_num}/{total_days}] {current_str} → {existing_count}レース取得済み, スキップ[/dim]")
+                skipped_days += 1
+                current += timedelta(days=1)
+                continue
+
+            console.print(f"[bold][{now}] [{day_num}/{total_days}] {current_str} ({elapsed_str}経過) ---[/bold]")
 
             try:
                 races = scraper.scrape_race_list(current_str)
@@ -200,19 +219,21 @@ def scrape_range(date_from: str, date_to: str | None, source: str, with_results:
 
             # 日ごとの休憩（サーバー負荷軽減）
             if current < end:
-                import time
-                time.sleep(DAY_PAUSE)
+                time_mod.sleep(DAY_PAUSE)
 
             current += timedelta(days=1)
 
         # サマリー
+        total_elapsed = time_mod.time() - started_at
+        h, m = int(total_elapsed // 3600), int(total_elapsed % 3600 // 60)
         console.print(f"\n[bold green]{'='*50}[/bold green]")
-        console.print(f"[bold green]完了![/bold green]")
+        console.print(f"[bold green]完了! (所要時間: {h}h{m:02d}m)[/bold green]")
         console.print(f"  期間: {date_from} → {end.isoformat()} ({total_days}日)")
-        console.print(f"  レース: {total_races}")
-        console.print(f"  出走エントリー: {total_entries}")
+        console.print(f"  取得: {total_races}レース / {total_entries}エントリー")
         if with_results:
-            console.print(f"  結果データ: {total_results}")
+            console.print(f"  結果: {total_results}件")
+        if skipped_days > 0:
+            console.print(f"  スキップ: {skipped_days}日 (取得済み)")
         if error_days:
             console.print(f"  [yellow]エラー日: {', '.join(error_days)}[/yellow]")
 
