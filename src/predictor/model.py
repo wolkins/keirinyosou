@@ -23,6 +23,9 @@ except (ImportError, OSError):
 from src.common.config import PROJECT_ROOT
 from src.common.database import Odds, Race, RaceEntry, get_session
 
+from .calibration import ProbabilityCalibrator
+from .ensemble import EnsemblePredictor
+from .evaluation import evaluate_predictions
 from .features import FEATURE_COLUMNS, build_features_for_race
 
 MODEL_DIR = PROJECT_ROOT / "data" / "models"
@@ -146,31 +149,41 @@ class KeirinPredictor:
         with open(self._model_path, "wb") as f:
             pickle.dump({"model": ranker, "features": available_cols}, f)
 
-        # 評価指標
+        # 評価指標 (多軸評価)
         eval_results = {}
         if len(valid_df) > 0:
             valid_df = valid_df.copy()
             valid_df["pred_score"] = ranker.predict(X_valid)
-            # Top1的中率
-            top1_hits = 0
-            top3_hits = 0
-            n_eval_races = 0
-            for rid in valid_race_ids:
-                race_data = valid_df[valid_df["race_id"] == rid]
-                if race_data.empty:
-                    continue
-                n_eval_races += 1
-                pred_top = race_data.nlargest(1, "pred_score")["finish_position"].values
-                if len(pred_top) > 0 and pred_top[0] == 1:
-                    top1_hits += 1
-                pred_top3_cars = set(race_data.nlargest(3, "pred_score")["car_number"].values)
-                actual_top3_cars = set(race_data.nsmallest(3, "finish_position")["car_number"].values)
-                if pred_top3_cars == actual_top3_cars:
-                    top3_hits += 1
 
-            if n_eval_races > 0:
-                eval_results["top1_accuracy"] = top1_hits / n_eval_races
-                eval_results["top3_exact"] = top3_hits / n_eval_races
+            # キャリブレータをfit (検証データで学習)
+            self._calibrator_win = ProbabilityCalibrator("win")
+            self._calibrator_top3 = ProbabilityCalibrator("top3")
+
+            win_labels = (valid_df["finish_position"] == 1).astype(int).values
+            top3_labels = (valid_df["finish_position"] <= 3).astype(int).values
+            raw_scores = valid_df["pred_score"].values
+
+            self._calibrator_win.fit(raw_scores, win_labels)
+            self._calibrator_top3.fit(raw_scores, top3_labels)
+            self._calibrator_win.save()
+            self._calibrator_top3.save()
+
+            # evaluate_predictions で多軸指標算出
+            eval_results = evaluate_predictions(valid_df, session=session)
+
+        # アンサンブル学習
+        ensemble_results = {}
+        if HAS_LIGHTGBM and len(valid_df) > 0:
+            try:
+                self._ensemble = EnsemblePredictor()
+                ens_result = self._ensemble.train(
+                    X_train, y_train, group_train, w_train,
+                    X_valid, y_valid, group_valid,
+                    train_df["finish_position"], valid_df["finish_position"],
+                )
+                ensemble_results["ensemble"] = ens_result.get("layer1_models", [])
+            except Exception as e:
+                ensemble_results["ensemble_error"] = str(e)
 
         return {
             "n_races": len(races),
@@ -183,6 +196,7 @@ class KeirinPredictor:
             "weight_max": float(full_df["sample_weight"].max()),
             "engine": "LightGBM" if HAS_LIGHTGBM else "sklearn",
             **eval_results,
+            **ensemble_results,
         }
 
     def load(self) -> bool:
@@ -213,8 +227,22 @@ class KeirinPredictor:
         available_cols = [c for c in feature_cols if c in df.columns]
         X = df[available_cols].fillna(0)
 
-        # LambdaRankスコア
-        scores = self.model.predict(X)
+        # アンサンブル予測を試行、なければLambdaRank単体
+        ensemble = getattr(self, "_ensemble", None)
+        if ensemble is None:
+            ensemble = EnsemblePredictor()
+            if ensemble.load():
+                self._ensemble = ensemble
+            else:
+                ensemble = None
+
+        if ensemble is not None:
+            try:
+                scores = ensemble.predict(X)
+            except Exception:
+                scores = self.model.predict(X)
+        else:
+            scores = self.model.predict(X)
 
         # スコアを0-1に正規化
         s_min, s_max = scores.min(), scores.max()
@@ -222,6 +250,17 @@ class KeirinPredictor:
             norm_scores = (scores - s_min) / (s_max - s_min)
         else:
             norm_scores = np.ones_like(scores) * 0.5
+
+        # キャリブレーション済み確率
+        if not hasattr(self, "_calibrator_win") or self._calibrator_win is None:
+            self._calibrator_win = ProbabilityCalibrator("win")
+            self._calibrator_win.load()
+        if not hasattr(self, "_calibrator_top3") or self._calibrator_top3 is None:
+            self._calibrator_top3 = ProbabilityCalibrator("top3")
+            self._calibrator_top3.load()
+
+        calibrated_win = self._calibrator_win.predict_proba(scores)
+        calibrated_top3 = self._calibrator_top3.predict_proba(scores)
 
         # オッズ情報
         odds_data = session.query(Odds).filter_by(race_id=race.id, bet_type="win").all()
@@ -242,11 +281,13 @@ class KeirinPredictor:
             entry = entry_map.get(car_num)
             score = float(norm_scores[i])
             raw_score = float(scores[i])
+            win_prob = float(calibrated_win[i])
+            top3_prob = float(calibrated_top3[i])
 
             odds_val = odds_map.get(car_num, 0)
 
-            # 期待値 = 予測確率 × オッズ
-            expected_value = score * odds_val if odds_val else None
+            # 期待値 = キャリブレーション済み勝率 × オッズ
+            expected_value = win_prob * odds_val if odds_val else None
 
             # モードによるスコア
             if self.mode == "roi" and expected_value is not None:
@@ -264,6 +305,8 @@ class KeirinPredictor:
                 "score": round(final_score, 4),
                 "probability": round(score, 4),
                 "raw_score": round(raw_score, 4),
+                "calibrated_win_prob": round(win_prob, 4),
+                "calibrated_top3_prob": round(top3_prob, 4),
                 "odds": odds_val,
                 "expected_value": round(expected_value, 4) if expected_value else None,
                 "recommendation": self._get_recommendation(score),

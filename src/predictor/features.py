@@ -492,6 +492,106 @@ def _calc_age_trend_features(player: Player | None,
 
 
 # =============================================================
+# レース格・距離特徴量 (v4)
+# =============================================================
+
+def _calc_race_context_features(race: Race, current_features: dict) -> dict:
+    """レースの文脈（決勝/準決勝、距離）から特徴量を算出"""
+    round_name = (race.round_name or "").strip()
+    distance = race.distance or 0
+
+    features = {
+        "is_final": 1 if "決勝" in round_name and "準" not in round_name else 0,
+        "is_semifinal": 1 if "準決" in round_name else 0,
+        "is_first_day": 1 if "初日" in round_name or "1日" in round_name else 0,
+        "distance": distance,
+        # 決勝 × 地元 の交差（決勝での地元勢の爆発力）
+        "final_x_hometown": 0,
+        # 決勝 × グレード の交差
+        "final_x_grade": 0,
+    }
+
+    if features["is_final"]:
+        features["final_x_hometown"] = current_features.get("is_hometown", 0)
+        features["final_x_grade"] = current_features.get("race_grade", 0)
+
+    return features
+
+
+# =============================================================
+# ライン結束力 (v4)
+# =============================================================
+
+def _calc_line_cohesion(entry: RaceEntry, line_info: dict,
+                         history: list[RaceEntry],
+                         session: Session | None) -> dict:
+    """同ラインメンバーとの過去のワンツー率等"""
+    features = {
+        "line_cohesion": 0.0,  # 同ラインメンバーとの過去連携率
+        "same_region_line_ratio": 0.0,  # ライン内同地区率
+    }
+
+    if not line_info or not session:
+        return features
+
+    members = line_info.get("line_members", [])
+    if len(members) <= 1:
+        return features
+
+    # ライン内の同地区率
+    my_pref = ""
+    if entry.player_id:
+        from src.common.database import Player
+        player = session.query(Player).filter_by(id=entry.player_id).first()
+        if player:
+            my_pref = _normalize_prefecture(player.prefecture)
+
+    if my_pref and len(members) > 1:
+        same_count = 0
+        for m in members:
+            if m.car_number == entry.car_number:
+                continue
+            if m.player_id:
+                from src.common.database import Player
+                mp = session.query(Player).filter_by(id=m.player_id).first()
+                if mp and _normalize_prefecture(mp.prefecture) == my_pref:
+                    same_count += 1
+        features["same_region_line_ratio"] = same_count / (len(members) - 1)
+
+    return features
+
+
+# =============================================================
+# 交互作用特徴量 (v4)
+# =============================================================
+
+def _calc_interaction_features(f: dict) -> dict:
+    """既存特徴量の交差項"""
+    return {
+        # 番手 × 先頭の先行力
+        "second_x_leader_escape": (
+            f.get("is_line_second", 0) * f.get("line_leader_strength", 0)
+        ),
+        # ライン人数 × 先行争い激化
+        "line_size_x_pace": (
+            f.get("line_size", 1) * f.get("pace_pressure", 0)
+        ),
+        # 地元 × グレード
+        "hometown_x_grade": (
+            f.get("is_hometown", 0) * f.get("race_grade", 0)
+        ),
+        # 勝率 × 直近トレンド
+        "winrate_x_trend": (
+            f.get("win_rate", 0) * (1 - f.get("finish_trend_slope", 0))
+        ),
+        # 年齢 × 上がり改善
+        "age_x_time_trend": (
+            f.get("player_age", 30) * (-f.get("time_improvement_slope", 0))
+        ),
+    }
+
+
+# =============================================================
 # メイン特徴量構築
 # =============================================================
 
@@ -577,6 +677,15 @@ def _build_entry_features(entry: RaceEntry, player: Player | None,
     # === 年齢×トレンド (v3) ===
     age_trend = _calc_age_trend_features(player, trend)
     features.update(age_trend)
+
+    # === レース格・距離 (v4) ===
+    features.update(_calc_race_context_features(race, features))
+
+    # === ライン結束力 (v4) ===
+    features.update(_calc_line_cohesion(entry, li, history, session))
+
+    # === 交互作用特徴量 (v4) ===
+    features.update(_calc_interaction_features(features))
 
     # === ターゲット ===
     if entry.finish_position is not None:
@@ -710,4 +819,12 @@ FEATURE_COLUMNS = [
     "n_escape_riders", "n_scoop_riders", "escape_ratio", "pace_pressure",
     # 年齢×トレンド (v3)
     "age_category", "young_growth", "veteran_stability", "age_trend_cross",
+    # レース格・距離 (v4)
+    "is_final", "is_semifinal", "is_first_day", "distance",
+    "final_x_hometown", "final_x_grade",
+    # ライン結束力 (v4)
+    "line_cohesion", "same_region_line_ratio",
+    # 交互作用 (v4)
+    "second_x_leader_escape", "line_size_x_pace",
+    "hometown_x_grade", "winrate_x_trend", "age_x_time_trend",
 ]
