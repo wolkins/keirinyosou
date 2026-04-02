@@ -1,0 +1,36 @@
+{% if races %}
+<table>
+  <thead>
+    <tr>
+      <th>会場</th>
+      <th class="text-center">R</th>
+      <th>レース名</th>
+      <th class="text-center">グレード</th>
+      <th class="text-center">出走</th>
+      <th class="text-center">状態</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in races %}
+    <tr>
+      <td>{{ r.venue }}</td>
+      <td class="text-center">{{ r.race_number }}</td>
+      <td>{{ r.race_name }}</td>
+      <td class="text-center">
+        {% if r.grade %}
+        <span class="badge badge-f1">{{ r.grade }}</span>
+        {% endif %}
+      </td>
+      <td class="text-center">{{ r.n_entries }}名</td>
+      <td class="text-center">
+        <span class="badge badge-{{ r.status }}">{{ r.status }}</span>
+      </td>
+      <td><a href="/race/{{ r.id }}">詳細</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color: var(--text-dim);">この日のレースデータはありません。</p>
+{% endif %}

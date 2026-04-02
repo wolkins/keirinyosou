@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}競輪予想{% endblock %}</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3a;
+      --text: #e1e4ed;
+      --text-dim: #8b8fa3;
+      --accent: #4f8ff7;
+      --green: #34d399;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --orange: #fb923c;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Layout */
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 1rem; }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 0;
+      margin-bottom: 1.5rem;
+    }
+    header .container { display: flex; align-items: center; gap: 2rem; }
+    header h1 { font-size: 1.1rem; white-space: nowrap; }
+    nav { display: flex; gap: 1.5rem; font-size: 0.9rem; }
+    nav a { color: var(--text-dim); }
+    nav a:hover, nav a.active { color: var(--text); text-decoration: none; }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .card h2 { font-size: 1rem; margin-bottom: 0.75rem; color: var(--text-dim); }
+
+    /* Stats grid */
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
+    .stat { text-align: center; padding: 0.75rem; background: var(--bg); border-radius: 6px; }
+    .stat .num { font-size: 1.5rem; font-weight: bold; color: var(--accent); }
+    .stat .label { font-size: 0.75rem; color: var(--text-dim); }
+
+    /* Table */
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { text-align: left; padding: 0.5rem 0.75rem; color: var(--text-dim); font-weight: 600;
+         border-bottom: 2px solid var(--border); font-size: 0.75rem; text-transform: uppercase; }
+    td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+    tr:hover { background: rgba(79, 143, 247, 0.05); }
+    .text-right { text-align: right; }
+    .text-center { text-align: center; }
+
+    /* Badges */
+    .badge {
+      display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px;
+      font-size: 0.7rem; font-weight: 600;
+    }
+    .badge-gp { background: #7c3aed; color: #fff; }
+    .badge-g1 { background: #dc2626; color: #fff; }
+    .badge-g2 { background: #ea580c; color: #fff; }
+    .badge-g3 { background: #ca8a04; color: #fff; }
+    .badge-f1 { background: #2563eb; color: #fff; }
+    .badge-f2 { background: #475569; color: #fff; }
+    .badge-finished { background: var(--green); color: #000; }
+    .badge-scheduled { background: var(--border); color: var(--text-dim); }
+
+    /* Recommendation marks */
+    .rec-honmei { color: var(--red); font-weight: bold; }
+    .rec-taikou { color: var(--yellow); font-weight: bold; }
+    .rec-tanana { color: var(--accent); }
+    .rec-renka { color: var(--text-dim); }
+
+    /* Buttons / Controls */
+    .btn {
+      display: inline-block; padding: 0.4rem 1rem; border-radius: 6px;
+      font-size: 0.8rem; border: 1px solid var(--border); background: var(--surface);
+      color: var(--text); cursor: pointer; transition: background 0.15s;
+    }
+    .btn:hover { background: var(--border); text-decoration: none; }
+    .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    input[type="date"] {
+      background: var(--surface); border: 1px solid var(--border); color: var(--text);
+      padding: 0.4rem 0.75rem; border-radius: 6px; font-size: 0.85rem;
+    }
+
+    /* Bet suggestions */
+    .bet-card {
+      display: flex; align-items: center; gap: 1rem;
+      padding: 0.6rem 1rem; background: var(--bg); border-radius: 6px; margin-top: 0.5rem;
+    }
+    .bet-type { font-weight: bold; color: var(--accent); min-width: 4rem; }
+    .bet-combo { font-family: monospace; font-size: 1rem; min-width: 5rem; }
+    .bet-amount { color: var(--green); font-weight: bold; }
+    .bet-reason { color: var(--text-dim); font-size: 0.8rem; }
+
+    /* htmx indicator */
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-block; }
+    .spinner { animation: spin 1s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Date list */
+    .date-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .date-list a { font-size: 0.8rem; }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .stats { grid-template-columns: repeat(3, 1fr); }
+      table { font-size: 0.75rem; }
+      td, th { padding: 0.4rem; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <h1>競輪予想</h1>
+      <nav>
+        <a href="/">ダッシュボード</a>
+        <a href="/races">レース一覧</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

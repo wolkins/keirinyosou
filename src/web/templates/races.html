@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}レース一覧 - 競輪予想{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h2>レース一覧</h2>
+  <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+    <input type="date" id="race-date" value="{{ target_date }}"
+           hx-get="/races" hx-target="#race-table" hx-swap="innerHTML"
+           hx-include="this" name="d"
+           hx-indicator="#loading">
+    <span id="loading" class="htmx-indicator spinner">&#9881;</span>
+  </div>
+  <div id="race-table">
+    {% include "_race_list.html" %}
+  </div>
+</div>
+
+{% endblock %}

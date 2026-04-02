@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ race.venue }} {{ race.race_number }}R - 競輪予想{% endblock %}
+{% block content %}
+
+<div style="margin-bottom: 1rem;">
+  <a href="/races?d={{ race.date }}">&larr; {{ race.date }} のレース一覧</a>
+</div>
+
+<div class="card">
+  <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
+    <h2 style="font-size: 1.2rem; color: var(--text); margin: 0;">
+      {{ race.venue }} {{ race.race_number }}R
+      {% if race.race_name %} {{ race.race_name }}{% endif %}
+    </h2>
+    {% if race.grade %}
+    <span class="badge badge-f1">{{ race.grade }}</span>
+    {% endif %}
+    <span class="badge badge-{{ race.status }}">{{ race.status }}</span>
+    {% if race.distance %}
+    <span style="color: var(--text-dim); font-size: 0.85rem;">{{ race.distance }}m</span>
+    {% endif %}
+    {% if race.is_girl %}
+    <span class="badge" style="background: #ec4899; color: #fff;">ガールズ</span>
+    {% endif %}
+  </div>
+</div>
+
+<!-- 出走表 -->
+<div class="card">
+  <h2>出走表</h2>
+  <table>
+    <thead>
+      <tr>
+        <th class="text-center">車番</th>
+        <th>選手</th>
+        <th class="text-center">級</th>
+        <th>登録地</th>
+        <th class="text-right">勝率</th>
+        <th class="text-right">2連率</th>
+        <th class="text-right">3連率</th>
+        <th>脚質</th>
+        <th>ライン</th>
+        {% if race.status == "finished" %}
+        <th class="text-center">着</th>
+        <th class="text-right">タイム</th>
+        <th>決まり手</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr{% if e.finish_position == 1 %} style="background: rgba(251, 191, 36, 0.1);"{% endif %}>
+        <td class="text-center" style="font-weight: bold; font-size: 1.1rem;">{{ e.car_number }}</td>
+        <td>{{ e.player_name }}</td>
+        <td class="text-center">{{ e.grade }}</td>
+        <td>{{ e.prefecture }}</td>
+        <td class="text-right">{{ "%.1f"|format(e.win_rate) }}</td>
+        <td class="text-right">{{ "%.1f"|format(e.second_rate) }}</td>
+        <td class="text-right">{{ "%.1f"|format(e.third_rate) }}</td>
+        <td>{{ e.line_group }}</td>
+        <td>{{ e.line_label }}</td>
+        {% if race.status == "finished" %}
+        <td class="text-center" style="font-weight: bold;{% if e.finish_position == 1 %} color: var(--yellow);{% elif e.finish_position and e.finish_position <= 3 %} color: var(--accent);{% endif %}">
+          {{ e.finish_position or "-" }}
+        </td>
+        <td class="text-right">{{ e.finish_time }}</td>
+        <td>{{ e.win_technique }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- 予測 -->
+<div class="card">
+  <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem;">
+    <h2 style="margin: 0;">予測</h2>
+    <a class="btn {% if mode == 'accuracy' %}active{% endif %}"
+       hx-get="/predict/{{ race.id }}?mode=accuracy" hx-target="#prediction-area" hx-swap="innerHTML">
+      的中率重視
+    </a>
+    <a class="btn {% if mode == 'roi' %}active{% endif %}"
+       hx-get="/predict/{{ race.id }}?mode=roi" hx-target="#prediction-area" hx-swap="innerHTML">
+      回収率重視
+    </a>
+  </div>
+  <div id="prediction-area">
+    {% include "_predictions.html" %}
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,67 @@
+{% if predictions %}
+<table>
+  <thead>
+    <tr>
+      <th>予想</th>
+      <th class="text-center">車番</th>
+      <th>選手</th>
+      <th class="text-center">級</th>
+      <th class="text-right">勝率</th>
+      <th class="text-right">2連率</th>
+      <th class="text-right">3連率</th>
+      <th class="text-right">スコア</th>
+      {% if mode == "roi" %}
+      <th class="text-right">ｵｯｽﾞ</th>
+      <th class="text-right">期待値</th>
+      {% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in predictions %}
+    <tr>
+      <td>
+        {% if "◎" in p.recommendation %}
+        <span class="rec-honmei">{{ p.recommendation }}</span>
+        {% elif "○" in p.recommendation %}
+        <span class="rec-taikou">{{ p.recommendation }}</span>
+        {% elif "▲" in p.recommendation %}
+        <span class="rec-tanana">{{ p.recommendation }}</span>
+        {% elif "△" in p.recommendation %}
+        <span class="rec-renka">{{ p.recommendation }}</span>
+        {% else %}
+        <span style="color: var(--text-dim);">{{ p.recommendation }}</span>
+        {% endif %}
+      </td>
+      <td class="text-center" style="font-weight: bold; font-size: 1.1rem;">{{ p.car_number }}</td>
+      <td>{{ p.player_name }}</td>
+      <td class="text-center">{{ p.grade }}</td>
+      <td class="text-right">{{ "%.1f"|format(p.win_rate) if p.win_rate else "-" }}</td>
+      <td class="text-right">{{ "%.1f"|format(p.second_rate) if p.second_rate else "-" }}</td>
+      <td class="text-right">{{ "%.1f"|format(p.third_rate) if p.third_rate else "-" }}</td>
+      <td class="text-right" style="font-weight: bold;">{{ "%.2f"|format(p.score) }}</td>
+      {% if mode == "roi" %}
+      <td class="text-right">{{ "%.1f"|format(p.odds) if p.odds else "-" }}</td>
+      <td class="text-right">{{ "%.2f"|format(p.expected_value) if p.expected_value else "-" }}</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if bets %}
+<div style="margin-top: 1rem;">
+  <h2>推奨買い目 (予算 1,000円)</h2>
+  {% for bet in bets %}
+  <div class="bet-card">
+    <span class="bet-type">{{ bet.bet_type }}</span>
+    <span class="bet-combo">{{ bet.combination }}</span>
+    <span class="bet-amount">{{ "{:,}".format(bet.amount) }}円</span>
+    <span class="bet-reason">{{ bet.reason }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% else %}
+<p style="color: var(--text-dim);">予測データがありません。</p>
+{% endif %}

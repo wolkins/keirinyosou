@@ -429,5 +429,16 @@ def status():
     session.close()
 
 
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="ホスト")
+@click.option("--port", default=8000, type=int, help="ポート番号")
+@click.option("--reload", "use_reload", is_flag=True, help="自動リロード (開発用)")
+def serve(host: str, port: int, use_reload: bool):
+    """Webサーバーを起動"""
+    import uvicorn
+    console.print(f"\n[bold blue]Web サーバー起動: http://{host}:{port}[/bold blue]\n")
+    uvicorn.run("src.web.app:app", host=host, port=port, reload=use_reload)
+
+
 if __name__ == "__main__":
     cli()

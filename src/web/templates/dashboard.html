@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}ダッシュボード - 競輪予想{% endblock %}
+{% block content %}
+
+<div class="card">
+  <h2>DB状況</h2>
+  <div class="stats">
+    <div class="stat">
+      <div class="num">{{ "{:,}".format(stats.races_total) }}</div>
+      <div class="label">レース</div>
+    </div>
+    <div class="stat">
+      <div class="num">{{ "{:,}".format(stats.races_finished) }}</div>
+      <div class="label">確定済み</div>
+    </div>
+    <div class="stat">
+      <div class="num">{{ "{:,}".format(stats.entries_total) }}</div>
+      <div class="label">エントリー</div>
+    </div>
+    <div class="stat">
+      <div class="num">{{ "{:,}".format(stats.players_total) }}</div>
+      <div class="label">選手</div>
+    </div>
+    <div class="stat">
+      <div class="num">{{ "{:,}".format(stats.entries_with_result) }}</div>
+      <div class="label">結果確定</div>
+    </div>
+    <div class="stat">
+      <div class="num">{{ "{:,}".format(stats.odds_total) }}</div>
+      <div class="label">オッズ</div>
+    </div>
+  </div>
+</div>
+
+{% if today_races %}
+<div class="card">
+  <h2>本日のレース ({{ today }})</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>会場</th>
+        <th class="text-center">R</th>
+        <th>レース名</th>
+        <th class="text-center">グレード</th>
+        <th class="text-center">出走</th>
+        <th class="text-center">状態</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in today_races %}
+      <tr>
+        <td>{{ r.venue }}</td>
+        <td class="text-center">{{ r.race_number }}</td>
+        <td>{{ r.race_name }}</td>
+        <td class="text-center">
+          {% if r.grade %}
+          <span class="badge badge-{{ r.grade|lower|replace(' ','')|replace('iii','g3')|replace('ii','g2')|replace('i','g1') }}">{{ r.grade }}</span>
+          {% endif %}
+        </td>
+        <td class="text-center">{{ r.n_entries }}名</td>
+        <td class="text-center">
+          <span class="badge badge-{{ r.status }}">{{ r.status }}</span>
+        </td>
+        <td><a href="/race/{{ r.id }}">詳細</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card">
+  <h2>本日のレース ({{ today }})</h2>
+  <p style="color: var(--text-dim);">本日のレースデータはありません。</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>直近の開催日</h2>
+  <div class="date-list">
+    {% for d in recent_dates %}
+    <a href="/races?d={{ d }}" class="btn">{{ d }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+{% endblock %}
