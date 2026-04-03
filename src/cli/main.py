@@ -434,78 +434,59 @@ def check_data(date_from: str, date_to: str | None):
 
         stats_by_date = {row.race_date: row for row in stats}
 
-        # 不完全な日を検出
+        # 不完全な日を検出（DB登録済みの日のみチェック）
         incomplete = []
-        missing = []
-        current = start
-        while current <= end:
-            if current in stats_by_date:
-                row = stats_by_date[current]
-                # エントリーがないレースがある or 結果がないエントリーがある
-                has_no_entry_races = session.query(Race).filter(
-                    Race.race_date == current,
-                    ~Race.entries.any(),
-                ).count()
-                has_no_result_races = session.query(Race).filter(
-                    Race.race_date == current,
-                    Race.entries.any(),
-                    ~Race.entries.any(RaceEntry.finish_position.isnot(None)),
-                ).count()
-                if has_no_entry_races > 0 or has_no_result_races > 0:
-                    incomplete.append({
-                        "date": current,
-                        "races": row.race_count,
-                        "entries": row.entry_count,
-                        "results": row.result_count,
-                        "no_entry": has_no_entry_races,
-                        "no_result": has_no_result_races,
-                    })
-            else:
-                missing.append(current)
-            current += timedelta(days=1)
+        for dt, row in stats_by_date.items():
+            has_no_entry_races = session.query(Race).filter(
+                Race.race_date == dt,
+                ~Race.entries.any(),
+            ).count()
+            has_no_result_races = session.query(Race).filter(
+                Race.race_date == dt,
+                Race.entries.any(),
+                ~Race.entries.any(RaceEntry.finish_position.isnot(None)),
+            ).count()
+            if has_no_entry_races > 0 or has_no_result_races > 0:
+                incomplete.append({
+                    "date": dt,
+                    "races": row.race_count,
+                    "entries": row.entry_count,
+                    "results": row.result_count,
+                    "no_entry": has_no_entry_races,
+                    "no_result": has_no_result_races,
+                })
 
         # 結果表示
         console.print(f"\n[bold blue]データ整合性チェック: {date_from} → {end.isoformat()}[/bold blue]\n")
         console.print(f"  DB登録日数: {len(stats_by_date)} / チェック対象: {(end - start).days + 1}日\n")
 
-        if not incomplete and not missing:
-            console.print("[green]問題なし！ すべての日のデータが完全です。[/green]\n")
+        if not incomplete:
+            console.print("[green]問題なし！ 登録済みの全日のデータが完全です。[/green]\n")
         else:
-            if incomplete:
-                table = Table(title="不完全なデータがある日", show_header=True, header_style="bold yellow")
-                table.add_column("日付", width=12)
-                table.add_column("レース数", justify="right", width=8)
-                table.add_column("エントリー", justify="right", width=10)
-                table.add_column("結果", justify="right", width=8)
-                table.add_column("出走表なし", justify="right", width=10)
-                table.add_column("結果なし", justify="right", width=8)
-                for row in incomplete:
-                    table.add_row(
-                        row["date"].isoformat(),
-                        str(row["races"]),
-                        str(row["entries"]),
-                        str(row["results"]),
-                        f"[red]{row['no_entry']}[/red]" if row["no_entry"] else "0",
-                        f"[red]{row['no_result']}[/red]" if row["no_result"] else "0",
-                    )
-                console.print(table)
-                console.print()
+            table = Table(title="不完全なデータがある日", show_header=True, header_style="bold yellow")
+            table.add_column("日付", width=12)
+            table.add_column("レース数", justify="right", width=8)
+            table.add_column("エントリー", justify="right", width=10)
+            table.add_column("結果", justify="right", width=8)
+            table.add_column("出走表なし", justify="right", width=10)
+            table.add_column("結果なし", justify="right", width=8)
+            for row in incomplete:
+                table.add_row(
+                    row["date"].isoformat(),
+                    str(row["races"]),
+                    str(row["entries"]),
+                    str(row["results"]),
+                    f"[red]{row['no_entry']}[/red]" if row["no_entry"] else "0",
+                    f"[red]{row['no_result']}[/red]" if row["no_result"] else "0",
+                )
+            console.print(table)
+            console.print()
 
-            if missing:
-                console.print(f"[yellow]データが存在しない日: {len(missing)}日[/yellow]")
-                # 開催がない日もあるので参考情報として表示
-                console.print("  ※開催のない日も含まれます")
-                for d in missing:
-                    console.print(f"  {d.isoformat()}")
-                console.print()
-
-            # 再取得コマンドを生成
-            rescrape_dates = [row["date"] for row in incomplete]
-            if rescrape_dates:
-                console.print("[bold]再取得コマンド (不完全な日):[/bold]")
-                for d in rescrape_dates:
-                    console.print(f"  python -m src.cli.main scrape --date {d.isoformat()} --with-results")
-                console.print()
+            # 再取得コマンド
+            console.print("[bold]再取得コマンド:[/bold]")
+            for row in incomplete:
+                console.print(f"  python -m src.cli.main scrape --date {row['date'].isoformat()} --with-results")
+            console.print()
 
     finally:
         session.close()
