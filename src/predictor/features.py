@@ -17,8 +17,11 @@ from src.common.database import Odds, Player, Race, RaceEntry, Racecourse
 
 def build_features_for_race(session: Session, race: Race) -> pd.DataFrame:
     """レースの全エントリーから特徴量DataFrameを生成"""
+    # Racecourseキャッシュを初期化
+    _ensure_racecourse_cache(session)
+
     entries = session.query(RaceEntry).filter_by(race_id=race.id).all()
-    racecourse = session.query(Racecourse).filter_by(id=race.racecourse_id).first()
+    racecourse = _racecourse_cache.get(race.racecourse_id) or session.query(Racecourse).filter_by(id=race.racecourse_id).first()
 
     if not entries:
         return pd.DataFrame()
@@ -126,15 +129,17 @@ def _calc_strength(entry: RaceEntry | None) -> float:
 # =============================================================
 
 def _get_player_history(session: Session, player_id: int, current_race_id: int,
-                        limit: int = 10) -> list[RaceEntry]:
-    """選手の過去レース結果を取得（データリーク防止: 現在レースより前のみ）"""
+                        limit: int = 10) -> list[tuple[RaceEntry, Race]]:
+    """選手の過去レース結果を取得（データリーク防止: 現在レースより前のみ）
+    Returns: [(RaceEntry, Race), ...] のタプルリスト
+    """
     current_race = session.query(Race).filter_by(id=current_race_id).first()
     if not current_race:
         return []
 
     from sqlalchemy import or_, and_
     past_entries = (
-        session.query(RaceEntry)
+        session.query(RaceEntry, Race)
         .join(Race, RaceEntry.race_id == Race.id)
         .filter(
             RaceEntry.player_id == player_id,
@@ -154,7 +159,7 @@ def _get_player_history(session: Session, player_id: int, current_race_id: int,
     return past_entries
 
 
-def _calc_trend_features(history: list[RaceEntry]) -> dict:
+def _calc_trend_features(history: list[tuple[RaceEntry, Race]]) -> dict:
     """直近走成績からトレンド特徴量を算出"""
     features = {
         "recent_races_count": len(history),
@@ -168,7 +173,7 @@ def _calc_trend_features(history: list[RaceEntry]) -> dict:
     if not history:
         return features
 
-    positions = [e.finish_position for e in history if e.finish_position]
+    positions = [e.finish_position for e, r in history if e.finish_position]
     if not positions:
         return features
 
@@ -194,7 +199,7 @@ def _calc_trend_features(history: list[RaceEntry]) -> dict:
 # =============================================================
 
 def _calc_track_style_features(entry: RaceEntry, racecourse: Racecourse | None,
-                                history: list[RaceEntry], session: Session) -> dict:
+                                history: list[tuple[RaceEntry, Race]], session: Session) -> dict:
     """バンク長と脚質の相性特徴量"""
     track_len = racecourse.track_length if racecourse else 400
     style = (entry.line_group or "").strip()
@@ -209,15 +214,13 @@ def _calc_track_style_features(entry: RaceEntry, racecourse: Racecourse | None,
         "chase_on_long": 1 if style in ("差", "追", "マーク", "ク") and track_len >= 500 else 0,
     }
 
-    # 同バンク長での過去成績
-    if history and racecourse and session:
+    # 同バンク長での過去成績(Raceからracecourse_idを取得してキャッシュ参照)
+    if history and racecourse:
         same_track_results = []
-        for h in history:
-            h_race = session.query(Race).filter_by(id=h.race_id).first()
-            if h_race:
-                h_rc = session.query(Racecourse).filter_by(id=h_race.racecourse_id).first()
-                if h_rc and h_rc.track_length == track_len and h.finish_position:
-                    same_track_results.append(h.finish_position)
+        for h, h_race in history:
+            h_rc = _racecourse_cache.get(h_race.racecourse_id)
+            if h_rc and h_rc.track_length == track_len and h.finish_position:
+                same_track_results.append(h.finish_position)
 
         if same_track_results:
             features["track_specific_avg"] = np.mean(same_track_results)
@@ -230,6 +233,19 @@ def _calc_track_style_features(entry: RaceEntry, racecourse: Racecourse | None,
         features["track_specific_top3"] = 0.3
 
     return features
+
+
+# Racecourseキャッシュ
+_racecourse_cache: dict[int, Racecourse] = {}
+
+
+def _ensure_racecourse_cache(session: Session):
+    """全競輪場を一括キャッシュ"""
+    global _racecourse_cache
+    if _racecourse_cache:
+        return
+    for rc in session.query(Racecourse).all():
+        _racecourse_cache[rc.id] = rc
 
 
 def _style_to_num(style: str) -> int:
@@ -254,48 +270,42 @@ def _parse_finish_time(time_str: str | None) -> float | None:
 
 def _calc_finish_time_features(entry: RaceEntry, race: Race,
                                 racecourse: Racecourse | None,
-                                history: list[RaceEntry],
+                                history: list[tuple[RaceEntry, Race]],
                                 session: Session) -> dict:
     """上がりタイムから脚力特徴量を算出"""
     features = {
         "finish_time_raw": 0.0,
-        "finish_time_zscore": 0.0,       # バンク別標準化タイム
-        "recent_avg_time": 0.0,           # 直近走平均タイム
-        "time_improvement_slope": 0.0,    # タイム改善傾き（負=速くなっている）
-        "time_vs_race_avg": 0.0,          # レース内平均との差
+        "finish_time_zscore": 0.0,
+        "recent_avg_time": 0.0,
+        "time_improvement_slope": 0.0,
+        "time_vs_race_avg": 0.0,
     }
 
-    current_time = _parse_finish_time(entry.finish_time)
-
-    # 直近走のタイム分析
     history_times = []
-    for h in history:
+    for h, h_race in history:
         t = _parse_finish_time(h.finish_time)
-        if t and 10.0 < t < 15.0:  # 妥当な範囲のみ
+        if t and 10.0 < t < 15.0:
             history_times.append(t)
 
     if history_times:
         weights = [0.9 ** i for i in range(len(history_times))]
         features["recent_avg_time"] = float(np.average(history_times, weights=weights))
 
-        # タイム改善傾き（負=速くなっている=良い）
         if len(history_times) >= 3:
             x = np.arange(len(history_times), dtype=float)
             slope = np.polyfit(x, history_times, 1)[0]
             features["time_improvement_slope"] = float(slope)
 
-    # バンク別の標準化タイム（同バンクの過去結果と比較）
-    if history and racecourse and session:
+    # バンク別の標準化タイム（キャッシュ参照）
+    if history and racecourse:
         track_len = racecourse.track_length or 400
         same_track_times = []
-        for h in history:
-            h_race = session.query(Race).filter_by(id=h.race_id).first()
-            if h_race:
-                h_rc = session.query(Racecourse).filter_by(id=h_race.racecourse_id).first()
-                if h_rc and h_rc.track_length == track_len:
-                    t = _parse_finish_time(h.finish_time)
-                    if t and 10.0 < t < 15.0:
-                        same_track_times.append(t)
+        for h, h_race in history:
+            h_rc = _racecourse_cache.get(h_race.racecourse_id)
+            if h_rc and h_rc.track_length == track_len:
+                t = _parse_finish_time(h.finish_time)
+                if t and 10.0 < t < 15.0:
+                    same_track_times.append(t)
 
         if len(same_track_times) >= 2:
             mean_t = np.mean(same_track_times)
@@ -312,7 +322,7 @@ def _calc_finish_time_features(entry: RaceEntry, race: Race,
 # 決まり手特徴量 (Phase 2)
 # =============================================================
 
-def _calc_win_technique_features(entry: RaceEntry, history: list[RaceEntry],
+def _calc_win_technique_features(entry: RaceEntry, history: list[tuple[RaceEntry, Race]],
                                   session: Session) -> dict:
     """選手の決まり手パターンから特徴量を算出"""
     features = {
@@ -329,7 +339,7 @@ def _calc_win_technique_features(entry: RaceEntry, history: list[RaceEntry],
 
     # 過去の1〜2着時の決まり手を集計
     techniques = []
-    for h in history:
+    for h, h_race in history:
         if h.win_technique and h.finish_position and h.finish_position <= 2:
             techniques.append(h.win_technique.strip())
 
@@ -523,7 +533,7 @@ def _calc_race_context_features(race: Race, current_features: dict) -> dict:
 # =============================================================
 
 def _calc_line_cohesion(entry: RaceEntry, line_info: dict,
-                         history: list[RaceEntry],
+                         history: list[tuple[RaceEntry, Race]],
                          session: Session | None) -> dict:
     """同ラインメンバーとの過去のワンツー率等"""
     features = {
@@ -569,32 +579,29 @@ def _calc_line_cohesion(entry: RaceEntry, line_info: dict,
 # 天候特徴量
 # =============================================================
 
-def _calc_weather_features(race: Race, history: list[RaceEntry],
+def _calc_weather_features(race: Race, history: list[tuple[RaceEntry, Race]],
                            session: Session | None = None) -> dict:
     """天候・バンク状態の特徴量"""
     features = {
         "weather_num": 0,
         "is_rainy": 0,
-        "rain_track_avg": 0.0,  # 雨天時の平均着順
-        "rain_track_top3": 0.0,  # 雨天時の複勝率
-        "rain_pref_diff": 0.0,  # 晴vs雨の成績差
+        "rain_track_avg": 0.0,
+        "rain_track_top3": 0.0,
+        "rain_pref_diff": 0.0,
     }
 
     weather = (race.weather or "").strip()
     features["weather_num"] = {"晴": 0, "曇": 1, "小雨": 2, "雨": 3, "雪": 4}.get(weather, 0)
     features["is_rainy"] = 1 if weather in ("小雨", "雨", "雪") else 0
 
-    if not history or not session:
+    if not history:
         return features
 
-    # 雨天/晴天時の成績を集計
+    # 雨天/晴天時の成績を集計（Raceはhistoryに含まれている）
     rain_pos = []
     fine_pos = []
-    for e in history:
+    for e, r in history:
         if not e.finish_position:
-            continue
-        r = session.query(Race).filter_by(id=e.race_id).first()
-        if not r:
             continue
         w = (r.weather or "").strip()
         if w in ("小雨", "雨", "雪"):
@@ -615,21 +622,21 @@ def _calc_weather_features(race: Race, history: list[RaceEntry],
 # ローテーション
 # =============================================================
 
-def _calc_rotation_features(race: Race, history: list[RaceEntry],
+def _calc_rotation_features(race: Race, history: list[tuple[RaceEntry, Race]],
                             session: Session | None = None) -> dict:
     """前走間隔・連戦パターン"""
     features = {
         "days_since_last": 30.0,
-        "is_consecutive": 0,  # 連投フラグ(中3日以内)
-        "is_fresh": 0,  # 休み明け(中30日以上)
+        "is_consecutive": 0,
+        "is_fresh": 0,
     }
 
-    if not history or not session:
+    if not history:
         return features
 
-    prev = session.query(Race).filter_by(id=history[0].race_id).first()
-    if prev and race.race_date and prev.race_date:
-        days = (race.race_date - prev.race_date).days
+    prev_entry, prev_race = history[0]
+    if race.race_date and prev_race.race_date:
+        days = (race.race_date - prev_race.race_date).days
         features["days_since_last"] = float(days)
         features["is_consecutive"] = 1 if days <= 3 else 0
         features["is_fresh"] = 1 if days >= 30 else 0
@@ -652,19 +659,15 @@ def _calc_leader_escape_features(line_info: dict, car_number: int,
     }
 
     li = line_info.get(car_number, {})
-    leader_car = li.get("leader_car_number")
-    if not leader_car or not session:
+    if not session:
         return features
 
-    # 先頭選手のエントリーを見つける
-    leader_entry = None
-    for e in all_entries:
-        if e.car_number == leader_car:
-            leader_entry = e
-            break
+    # 先頭選手を特定（ラインメンバーの最初の選手）
+    members = li.get("line_members", [])
+    leader_entry = members[0] if members else None
 
-    if not leader_entry or not leader_entry.player_id:
-        return features
+    if not leader_entry or not leader_entry.player_id or leader_entry.car_number == car_number:
+        return features  # 自分が先頭の場合はスキップ
 
     # 先頭選手の過去の決まり手を集計
     leader_history = _get_player_history(session, leader_entry.player_id,
@@ -672,7 +675,7 @@ def _calc_leader_escape_features(line_info: dict, car_number: int,
     escape_count = 0
     scoop_count = 0
     total = 0
-    for e in leader_history:
+    for e, r in leader_history:
         if not e.win_technique:
             continue
         total += 1
@@ -694,15 +697,15 @@ def _calc_leader_escape_features(line_info: dict, car_number: int,
 # 着順安定性・スピード
 # =============================================================
 
-def _calc_stability_features(history: list[RaceEntry]) -> dict:
+def _calc_stability_features(history: list[tuple[RaceEntry, Race]]) -> dict:
     """着順の安定性"""
     features = {
-        "finish_std": 0.0,  # 着順標準偏差
-        "best_finish": 9.0,  # ベスト着順
-        "worst_finish": 1.0,  # ワースト着順
+        "finish_std": 0.0,
+        "best_finish": 9.0,
+        "worst_finish": 1.0,
     }
 
-    positions = [e.finish_position for e in history if e.finish_position]
+    positions = [e.finish_position for e, r in history if e.finish_position]
     if len(positions) >= 3:
         features["finish_std"] = float(np.std(positions))
         features["best_finish"] = float(min(positions))
@@ -753,7 +756,7 @@ def _build_entry_features(entry: RaceEntry, player: Player | None,
                            race: Race, racecourse: Racecourse | None,
                            all_entries: list[RaceEntry],
                            line_info: dict,
-                           history: list[RaceEntry],
+                           history: list[tuple[RaceEntry, Race]],
                            session: Session | None = None) -> dict:
     """1エントリーの全特徴量を生成"""
     features = {
