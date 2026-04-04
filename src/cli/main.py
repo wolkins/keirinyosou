@@ -519,8 +519,8 @@ def status():
 
     # モデル状態
     from src.common.config import PROJECT_ROOT
-    accuracy_model = (PROJECT_ROOT / "data" / "models" / "model_accuracy.pkl").exists()
-    roi_model = (PROJECT_ROOT / "data" / "models" / "model_roi.pkl").exists()
+    accuracy_model = (PROJECT_ROOT / "data" / "models" / "model_ranker.pkl").exists()
+    roi_model = (PROJECT_ROOT / "data" / "models" / "calibrator_win.pkl").exists()
     table.add_row("", "")
     table.add_row("的中率モデル", "[green]あり[/green]" if accuracy_model else "[yellow]なし[/yellow]")
     table.add_row("回収率モデル", "[green]あり[/green]" if roi_model else "[yellow]なし[/yellow]")
