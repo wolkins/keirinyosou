@@ -17,3 +17,4 @@ data/models/
 
 # OS
 .DS_Store
+.env
