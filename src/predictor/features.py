@@ -565,6 +565,152 @@ def _calc_line_cohesion(entry: RaceEntry, line_info: dict,
 # 交互作用特徴量 (v4)
 # =============================================================
 
+# =============================================================
+# 天候特徴量
+# =============================================================
+
+def _calc_weather_features(race: Race, history: list[RaceEntry],
+                           session: Session | None = None) -> dict:
+    """天候・バンク状態の特徴量"""
+    features = {
+        "weather_num": 0,
+        "is_rainy": 0,
+        "rain_track_avg": 0.0,  # 雨天時の平均着順
+        "rain_track_top3": 0.0,  # 雨天時の複勝率
+        "rain_pref_diff": 0.0,  # 晴vs雨の成績差
+    }
+
+    weather = (race.weather or "").strip()
+    features["weather_num"] = {"晴": 0, "曇": 1, "小雨": 2, "雨": 3, "雪": 4}.get(weather, 0)
+    features["is_rainy"] = 1 if weather in ("小雨", "雨", "雪") else 0
+
+    if not history or not session:
+        return features
+
+    # 雨天/晴天時の成績を集計
+    rain_pos = []
+    fine_pos = []
+    for e in history:
+        if not e.finish_position:
+            continue
+        r = session.query(Race).filter_by(id=e.race_id).first()
+        if not r:
+            continue
+        w = (r.weather or "").strip()
+        if w in ("小雨", "雨", "雪"):
+            rain_pos.append(e.finish_position)
+        elif w in ("晴", "曇"):
+            fine_pos.append(e.finish_position)
+
+    if rain_pos:
+        features["rain_track_avg"] = float(np.mean(rain_pos))
+        features["rain_track_top3"] = sum(1 for p in rain_pos if p <= 3) / len(rain_pos)
+    if fine_pos and rain_pos:
+        features["rain_pref_diff"] = float(np.mean(rain_pos)) - float(np.mean(fine_pos))
+
+    return features
+
+
+# =============================================================
+# ローテーション
+# =============================================================
+
+def _calc_rotation_features(race: Race, history: list[RaceEntry],
+                            session: Session | None = None) -> dict:
+    """前走間隔・連戦パターン"""
+    features = {
+        "days_since_last": 30.0,
+        "is_consecutive": 0,  # 連投フラグ(中3日以内)
+        "is_fresh": 0,  # 休み明け(中30日以上)
+    }
+
+    if not history or not session:
+        return features
+
+    prev = session.query(Race).filter_by(id=history[0].race_id).first()
+    if prev and race.race_date and prev.race_date:
+        days = (race.race_date - prev.race_date).days
+        features["days_since_last"] = float(days)
+        features["is_consecutive"] = 1 if days <= 3 else 0
+        features["is_fresh"] = 1 if days >= 30 else 0
+
+    return features
+
+
+# =============================================================
+# ライン先頭の先行力（先行実績）
+# =============================================================
+
+def _calc_leader_escape_features(line_info: dict, car_number: int,
+                                  all_entries: list[RaceEntry],
+                                  session: Session | None = None) -> dict:
+    """ライン先頭選手の逃げ・捲り実績"""
+    features = {
+        "leader_escape_rate": 0.0,  # 先頭の逃げ率
+        "leader_scoop_rate": 0.0,  # 先頭の捲り率
+        "leader_self_power_rate": 0.0,  # 先頭の自力率(逃げ+捲り)
+    }
+
+    li = line_info.get(car_number, {})
+    leader_car = li.get("leader_car_number")
+    if not leader_car or not session:
+        return features
+
+    # 先頭選手のエントリーを見つける
+    leader_entry = None
+    for e in all_entries:
+        if e.car_number == leader_car:
+            leader_entry = e
+            break
+
+    if not leader_entry or not leader_entry.player_id:
+        return features
+
+    # 先頭選手の過去の決まり手を集計
+    leader_history = _get_player_history(session, leader_entry.player_id,
+                                          all_entries[0].race_id if all_entries else 0, limit=20)
+    escape_count = 0
+    scoop_count = 0
+    total = 0
+    for e in leader_history:
+        if not e.win_technique:
+            continue
+        total += 1
+        tech = e.win_technique.strip()
+        if "逃" in tech:
+            escape_count += 1
+        elif "捲" in tech:
+            scoop_count += 1
+
+    if total > 0:
+        features["leader_escape_rate"] = escape_count / total
+        features["leader_scoop_rate"] = scoop_count / total
+        features["leader_self_power_rate"] = (escape_count + scoop_count) / total
+
+    return features
+
+
+# =============================================================
+# 着順安定性・スピード
+# =============================================================
+
+def _calc_stability_features(history: list[RaceEntry]) -> dict:
+    """着順の安定性"""
+    features = {
+        "finish_std": 0.0,  # 着順標準偏差
+        "best_finish": 9.0,  # ベスト着順
+        "worst_finish": 1.0,  # ワースト着順
+    }
+
+    positions = [e.finish_position for e in history if e.finish_position]
+    if len(positions) >= 3:
+        features["finish_std"] = float(np.std(positions))
+        features["best_finish"] = float(min(positions))
+        features["worst_finish"] = float(max(positions))
+
+    return features
+
+
 def _calc_interaction_features(f: dict) -> dict:
     """既存特徴量の交差項"""
     return {
@@ -587,6 +733,14 @@ def _calc_interaction_features(f: dict) -> dict:
         # 年齢 × 上がり改善
         "age_x_time_trend": (
             f.get("player_age", 30) * (-f.get("time_improvement_slope", 0))
+        ),
+        # 雨天 × 雨走路適性
+        "rain_x_rain_pref": (
+            f.get("is_rainy", 0) * f.get("rain_track_top3", 0)
+        ),
+        # 番手 × 先頭の自力率
+        "second_x_leader_self": (
+            f.get("is_line_second", 0) * f.get("leader_self_power_rate", 0)
         ),
     }
 
@@ -684,7 +838,19 @@ def _build_entry_features(entry: RaceEntry, player: Player | None,
     # === ライン結束力 (v4) ===
     features.update(_calc_line_cohesion(entry, li, history, session))
 
-    # === 交互作用特徴量 (v4) ===
+    # === 天候 (v5) ===
+    features.update(_calc_weather_features(race, history, session))
+
+    # === ローテーション (v5) ===
+    features.update(_calc_rotation_features(race, history, session))
+
+    # === ライン先頭の先行力 (v5) ===
+    features.update(_calc_leader_escape_features(line_info, entry.car_number, all_entries, session))
+
+    # === 着順安定性 (v5) ===
+    features.update(_calc_stability_features(history))
+
+    # === 交互作用特徴量 (v5) ===
     features.update(_calc_interaction_features(features))
 
     # === ターゲット ===
@@ -824,7 +990,17 @@ FEATURE_COLUMNS = [
     "final_x_hometown", "final_x_grade",
     # ライン結束力 (v4)
     "line_cohesion", "same_region_line_ratio",
-    # 交互作用 (v4)
+    # 天候 (v5)
+    "weather_num", "is_rainy",
+    "rain_track_avg", "rain_track_top3", "rain_pref_diff",
+    # ローテーション (v5)
+    "days_since_last", "is_consecutive", "is_fresh",
+    # ライン先頭の先行力 (v5)
+    "leader_escape_rate", "leader_scoop_rate", "leader_self_power_rate",
+    # 着順安定性 (v5)
+    "finish_std", "best_finish", "worst_finish",
+    # 交互作用 (v5)
     "second_x_leader_escape", "line_size_x_pace",
     "hometown_x_grade", "winrate_x_trend", "age_x_time_trend",
+    "rain_x_rain_pref", "second_x_leader_self",
 ]

@@ -382,24 +382,41 @@ class KeirinPredictor:
         bets = []
 
         if self.mode == "accuracy":
-            # 的中率重視: 本命を厚く
+            # 的中率重視: 2車単・3連単・2車複
+            n1 = top3[0]['car_number']
+            n2 = top3[1]['car_number'] if len(top3) >= 2 else n1
+            n3 = top3[2]['car_number'] if len(top3) >= 3 else n2
+
             bets.append({
                 "bet_type": "2車単",
-                "combination": f"{top3[0]['car_number']}-{top3[1]['car_number']}",
-                "amount": budget // 3,
+                "combination": f"{n1}-{n2}",
+                "amount": budget // 5,
                 "reason": f"本命 {top3[0]['player_name']} → 対抗 {top3[1]['player_name']}",
             })
             if len(top3) >= 3:
+                # 3連単: 本線 + 裏目
+                bets.append({
+                    "bet_type": "3連単",
+                    "combination": f"{n1}-{n2}-{n3}",
+                    "amount": budget // 5,
+                    "reason": f"本線 ◎→○→▲",
+                })
+                bets.append({
+                    "bet_type": "3連単",
+                    "combination": f"{n1}-{n3}-{n2}",
+                    "amount": budget // 6,
+                    "reason": f"裏目 ◎→▲→○",
+                })
                 bets.append({
                     "bet_type": "2車単",
-                    "combination": f"{top3[0]['car_number']}-{top3[2]['car_number']}",
-                    "amount": budget // 4,
+                    "combination": f"{n1}-{n3}",
+                    "amount": budget // 6,
                     "reason": f"本命 {top3[0]['player_name']} → 単穴 {top3[2]['player_name']}",
                 })
             bets.append({
                 "bet_type": "2車複",
-                "combination": f"{top3[0]['car_number']}={top3[1]['car_number']}",
-                "amount": budget // 4,
+                "combination": f"{n1}={n2}",
+                "amount": budget // 5,
                 "reason": f"上位2名: {top3[0]['player_name']}, {top3[1]['player_name']}",
             })
 

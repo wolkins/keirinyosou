@@ -66,6 +66,8 @@ class Race(Base):
     round_name = Column(String(50))                          # 初日, 2日目, 決勝 等
     distance = Column(Integer)                               # 距離(m)
     is_girl = Column(Boolean, default=False)                 # ガールズケイリン
+    weather = Column(String(10))                             # 晴/曇/雨/雪
+    track_condition = Column(String(10))                     # 良/重/湿 等
     status = Column(String(20), default="scheduled")         # scheduled, finished, cancelled
 
     racecourse = relationship("Racecourse", back_populates="races")
