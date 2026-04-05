@@ -44,12 +44,14 @@ def store_race_entries(session: Session, race_date: str, venue_code: str,
     Returns:
         作成/更新されたRaceオブジェクト
     """
-    # 競輪場を取得 (コード → 名前でフォールバック)
-    racecourse = session.query(Racecourse).filter_by(code=venue_code).first()
-    if not racecourse and venue_slug:
+    # 競輪場を取得 (slug優先 → コードでフォールバック)
+    racecourse = None
+    if venue_slug:
         venue_name = SLUG_TO_NAME.get(venue_slug)
         if venue_name:
             racecourse = session.query(Racecourse).filter_by(name=venue_name).first()
+    if not racecourse:
+        racecourse = session.query(Racecourse).filter_by(code=venue_code).first()
     if not racecourse:
         print(f"  [WARN] 競輪場 code={venue_code} slug={venue_slug} が見つかりません")
         return None
