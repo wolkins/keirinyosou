@@ -8,7 +8,7 @@ from src.common.database import Odds, Player, Race, RaceEntry, Racecourse, get_s
 
 # Kドリームス slug → 競輪場名のマッピング
 SLUG_TO_NAME = {
-    "hakodate": "函館", "aomori": "青森", "iwakidaira": "いわき平",
+    "hakodate": "函館", "aomori": "青森", "iwakidaira": "いわき平", "iwakitaira": "いわき平",
     "yahiko": "弥彦", "maebashi": "前橋", "toride": "取手",
     "utsunomiya": "宇都宮", "omiya": "大宮", "seibu-en": "西武園",
     "keiokaku": "京王閣", "tachikawa": "立川", "matsudo": "松戸",
